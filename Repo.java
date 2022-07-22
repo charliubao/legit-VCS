@@ -410,7 +410,7 @@ public class Repo {
         return cPtr;
     }
 
-    public void mergeLineByLine(Path currP, Path branchP) throws IOException {
+    public void mergeLineByLine(String fileName, Path file, Path currP, Path branchP) throws IOException {
         try (BufferedReader reader1 = Files.newBufferedReader(currP);
              BufferedReader reader2 = Files.newBufferedReader(branchP)) {
             List<String> lines = new ArrayList<String>();
@@ -451,11 +451,12 @@ public class Repo {
             }
             reader1.close();
             reader2.close();
-            Files.write(currP, lines, StandardCharsets.UTF_8);
+            Files.write(file, lines, StandardCharsets.UTF_8);
+            add(fileName);
         }
     }
 
-    public void mergeEmpty(Path currP, Path branchP) throws IOException {
+    public void mergeEmpty(String fileName, Path file, Path currP, Path branchP) throws IOException {
         List<String> lines = new ArrayList<String>();
         lines.add("<<<<<<< HEAD");
         if(!Files.exists(currP)) {
@@ -480,7 +481,8 @@ public class Repo {
             }
         }
         lines.add(">>>>>>>");
-        Files.write(currP, lines, StandardCharsets.UTF_8);
+        Files.write(file, lines, StandardCharsets.UTF_8);
+        add(fileName);
     }
 
     public void merge(String branch) throws IOException {
@@ -525,28 +527,38 @@ public class Repo {
                 checkout(branchHead.getHash(), "--", file);
                 stagedFiles.put(file, branchHeadContents.get(file));
             }
-        } for (String file : branchFiles) {
+        }
+        boolean conflict = false;
+        for (String file : branchFiles) {
             if (!splitContents.containsKey(file) ||
                     (!splitContents.get(file).equals(branchHeadContents.get(file)) && !splitContents.get(file).equals(currContents.get(file)))) {
                 if (currFiles.contains(file) && !currContents.get(file).equals(branchHeadContents.get(file))) {
-                    mergeLineByLine(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                    mergeLineByLine(file, Paths.get(file), Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
                             Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                    conflict = true;
                 } else if (!currFiles.contains(file)) {
-                    mergeEmpty(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                    mergeEmpty(file, Paths.get(file), Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
                             Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                    conflict = true;
                 }
             }
         } for(String file : currFiles) {
             if (!splitContents.containsKey(file) ||
                     (!splitContents.get(file).equals(branchHeadContents.get(file)) && !splitContents.get(file).equals(currContents.get(file)))) {
                 if (branchFiles.contains(file) && !currContents.get(file).equals(branchHeadContents.get(file))) {
-                    mergeLineByLine(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                    mergeLineByLine(file, Paths.get(file), Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
                             Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                    conflict = true;
                 } else if (!branchFiles.contains(file)) {
-                    mergeEmpty(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                    mergeEmpty(file, Paths.get(file), Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
                             Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                    conflict = true;
                 }
             }
         }
+        if(conflict) throw new IOException("Encountered a merge conflict.");
+        else committing("Merged " + branch + " into " + HEAD);
+        Files.write(Paths.get(".legit/staging-area.txt"), Utils.serializeObject(stagedFiles));
+        Files.write(Paths.get(".legit/removed-files.txt"), Utils.serializeObject(removedFiles));
     }
 }

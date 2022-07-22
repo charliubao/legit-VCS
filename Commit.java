@@ -41,10 +41,6 @@ public class Commit implements Serializable{
         return parentHash;
     }
 
-    private void changeParentHash(String parent) {
-        parentHash = parent;
-    }
-
     public String getDatetime() {
         return datetime;
     }
