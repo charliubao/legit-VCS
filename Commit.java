@@ -8,7 +8,7 @@ import java.util.*;
 public class Commit implements Serializable{
     private String message;
     private String hash;
-    private ArrayList<String> parentHashes;
+    private String parentHash;
     private String datetime;
     private HashMap<String, String> contents; // file name, sha1
 
@@ -17,7 +17,7 @@ public class Commit implements Serializable{
         setHash();
         message = msg;
         contents = content;
-        parentHashes.add(parent);
+        parentHash = parent;
     }
 
     public byte[] getBytes() {
@@ -37,12 +37,12 @@ public class Commit implements Serializable{
         return message;
     }
 
-    public ArrayList<String> getParentHashes() {
-        return parentHashes;
+    public String getParentHash() {
+        return parentHash;
     }
 
-    private void addParentHashes(String parent) {
-        parentHashes.add(parent);
+    private void changeParentHash(String parent) {
+        parentHash = parent;
     }
 
     public String getDatetime() {

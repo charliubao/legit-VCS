@@ -1,7 +1,10 @@
 import java.io.*;
 import java.nio.file.*;
+import java.sql.Array;
 import java.util.*;
 import java.util.stream.*;
+import java.nio.charset.StandardCharsets;
+
 
 public class Repo {
     private String HEAD;
@@ -44,7 +47,7 @@ public class Repo {
 
         // Initializes first commit in /commits directory as a txt file, with sha1 as file name. 
         // Raw bytes of the commit object are written into the file.
-        Commit initialCommit = new Commit("initial commit", new HashMap<String, String>(), "");
+        Commit initialCommit = new Commit("initial commit", new HashMap<String, String>(), null);
         Path initPath = Paths.get(".legit/commits/" + initialCommit.getHash() + ".txt");                
         Files.write(initPath, initialCommit.getBytes());
 
@@ -55,24 +58,15 @@ public class Repo {
         // Creates a HEAD.txt file in /branches, writes the name of branch and the sha1 of the commit on separate lines.
         HEAD = "master";
         Path pathTohead = Paths.get(".legit/branches/HEAD.txt");
-        Files.writeString(pathTohead, HEAD + System.lineSeparator());
-        Files.writeString(pathTohead, initialCommit.getHash(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-
+        Files.writeString(pathTohead, HEAD);
     }
 
     public void add(String... fileNames) throws IOException {
-        Path pathToStage = Paths.get(".legit/staging-area.txt");
-        try {
-            byte[] bytes = Files.readAllBytes(pathToStage);
-            stagedFiles = (HashMap) Utils.deserializeObject(bytes);
-        } catch(Exception e) {
-            System.out.println("No staging area found.");
-        }
         for(String name : fileNames) {
             try {
                 byte[] data = Files.readAllBytes(Paths.get(name));
                 String hash = Utils.sha1Hash(data);
-                if(getCurrentCommit().getContents().containsValue(hash)) {
+                if(getBranchHead(HEAD).getContents().containsValue(hash)) {
                     stagedFiles.remove(name, hash);
                     continue;
                 }
@@ -86,41 +80,13 @@ public class Repo {
         Files.write(Paths.get(".legit/staging-area.txt"), Utils.serializeObject(stagedFiles));
     }
 
-    public Commit getCurrentCommit() throws IOException {
-        Path pathTohead = Paths.get(".legit/branches/HEAD.txt");
-        try {
-            Stream<String> lines = Files.lines(pathTohead);
-            List<String> collect = lines.collect(Collectors.toList());
-            lines.close();
-            String hash = collect.get(1);
-            String fileName = ".legit/commits/" + hash + ".txt";
-            byte[] data = Files.readAllBytes(Paths.get(fileName));
-            return (Commit) Utils.deserializeObject(data);
-        } catch (Exception e) {
-            System.out.println("Empty file.");
-        }
-        return null;
-    }
-
     public void committing(String msg) throws IOException {
-        Path pathToStage = Paths.get(".legit/staging-area.txt");
-        Path removed = Paths.get(".legit/removed-files.txt");
-        try {
-            byte[] stage = Files.readAllBytes(pathToStage);
-            byte[] r = Files.readAllBytes(removed);
-            stagedFiles = (HashMap) Utils.deserializeObject(stage);
-            removedFiles = (ArrayList) Utils.deserializeObject(r);
-        } catch (Exception e) {
-            System.out.println("Staging area or removed files not found.");
-        }
         if (stagedFiles.isEmpty() && removedFiles.isEmpty()) {
-            System.out.println("No changes added to the commit.");
-            return;
+            throw new IOException("No changes added to the commit.");
         } else if (msg.equals("")) {
-            System.out.println("Please enter a commit message.");
-            return;
+            throw new IOException("Please enter a commit message.");
         }
-        Commit curr = getCurrentCommit();
+        Commit curr = getBranchHead(HEAD);
         String currHash = curr.getHash();
         Map<String, String> newContents = (HashMap) curr.getContents().clone();
         List<String> stagedFileNames = new ArrayList<>(stagedFiles.keySet());
@@ -133,8 +99,7 @@ public class Repo {
         //new commit in /commits
         Files.write(Paths.get(".legit/commits/" + newCommit.getHash() + ".txt"), newCommit.getBytes());
         //update HEAD.txt
-        Files.writeString(Paths.get(".legit/branches/HEAD.txt"), HEAD + System.lineSeparator());
-        Files.writeString(Paths.get(".legit/branches/HEAD.txt"), newCommit.getHash(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        Files.writeString(Paths.get(".legit/branches/HEAD.txt"), HEAD);
         //update branches
         Files.writeString(Paths.get(".legit/branches/" + HEAD + ".txt"), newCommit.getHash() + System.lineSeparator());
         stagedFiles.clear();
@@ -144,24 +109,13 @@ public class Repo {
     }
 
     public void rm(String... fileNames) throws IOException {
-        Path pathToStage = Paths.get(".legit/staging-area.txt");
-        Path removed = Paths.get(".legit/removed-files.txt");
-        try {
-            byte[] stage = Files.readAllBytes(pathToStage);
-            byte[] r = Files.readAllBytes(removed);
-            stagedFiles = (HashMap) Utils.deserializeObject(stage);
-            removedFiles = (ArrayList) Utils.deserializeObject(r);
-        } catch (Exception e) {
-            System.out.println("Staging area or removed files not found.");
-        }
         if (!Files.exists(Paths.get(".legit"))) {
             throw new IllegalArgumentException("not .legit working directory");
         }
         for(String name : fileNames) {
-            Commit curr = getCurrentCommit();
-            if(!stagedFiles.containsKey(name) && !curr.getContents().containsKey(name)) {
-                System.out.print("No reason to remove " + name);
-                break;
+            Commit curr = getBranchHead(HEAD);
+            if((!stagedFiles.containsKey(name) && !curr.getContents().containsKey(name)) || !Files.exists(Paths.get(name))) {
+                throw new IOException("No reason to remove " + name);
             }
             if(curr.getContents().containsKey(name) && Files.isRegularFile(Paths.get(name))) {
                 Files.delete(Paths.get(name));
@@ -174,20 +128,16 @@ public class Repo {
     }
 
     public void log() throws IOException {
-        Commit curr = getCurrentCommit();
-        while (curr != null) {
+        Commit curr = getBranchHead(HEAD);
+        while (curr.getParentHash() != null) {
             System.out.println("===");
             System.out.println("Commit " + curr.getHash());
             System.out.println(curr.getDatetime());
             System.out.println(curr.getMessage());
             System.out.println();
-            if (curr.getParentHashes() != null) {
-                String parent = ".legit/commits/" + curr.getParentHashes().get(0) + ".txt";
-                byte[] data = Files.readAllBytes(Paths.get(parent));
-                curr = (Commit) Utils.deserializeObject(data);
-            } else {
-                break;
-            }
+            String parent = ".legit/commits/" + curr.getParentHash() + ".txt";
+            byte[] data = Files.readAllBytes(Paths.get(parent));
+            curr = (Commit) Utils.deserializeObject(data);
         }
     }
 
@@ -236,30 +186,11 @@ public class Repo {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        Path pathTohead = Paths.get(".legit/branches/HEAD.txt");
-        try {
-            Stream<String> lines = Files.lines(pathTohead);
-            List<String> collect = lines.collect(Collectors.toList());
-            lines.close();
-            HEAD = collect.get(0);
-        } catch (Exception e) {
-            System.out.println("HEAD.txt not found in branches.");
-        }
         branches.remove("HEAD");
         branches.remove(HEAD);
         branches.add("*" + HEAD);
         Collections.sort(branches);
 
-        Path pathToStage = Paths.get(".legit/staging-area.txt");
-        Path rem = Paths.get(".legit/removed-files.txt");
-        try {
-            byte[] stage = Files.readAllBytes(pathToStage);
-            byte[] r = Files.readAllBytes(rem);
-            stagedFiles = (HashMap) Utils.deserializeObject(stage);
-            removedFiles = (ArrayList) Utils.deserializeObject(r);
-        } catch (Exception e) {
-            System.out.println("Staging area or removed files not found.");
-        }
         List<String> staged = new ArrayList<>(stagedFiles.keySet());
         Collections.sort(staged);
         Collections.sort(removedFiles);
@@ -270,7 +201,7 @@ public class Repo {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        List<String> committedFiles = new ArrayList<>(getCurrentCommit().getContents().keySet());
+        List<String> committedFiles = new ArrayList<>(getBranchHead(HEAD).getContents().keySet());
         Collections.sort(currFiles);
 
         System.out.println("=== Branches ===");
@@ -288,8 +219,6 @@ public class Repo {
             System.out.println(removed);
         }
         System.out.println();
-        System.out.println("=== Modifications Not Staged For Commit ===");
-        System.out.println();
         System.out.println("=== Untracked Files ===");
         for(String file : currFiles) {
             if(!committedFiles.contains(file)) {
@@ -297,23 +226,12 @@ public class Repo {
             }
         }
         System.out.println();
-
     }
 
     public void checkout(String... args) throws IOException {
-        Path pathToStage = Paths.get(".legit/staging-area.txt");
-        Path removed = Paths.get(".legit/removed-files.txt");
-        try {
-            byte[] stage = Files.readAllBytes(pathToStage);
-            byte[] r = Files.readAllBytes(removed);
-            stagedFiles = (HashMap) Utils.deserializeObject(stage);
-            removedFiles = (ArrayList) Utils.deserializeObject(r);
-        } catch (Exception e) {
-            System.out.println("Staging area or removed files not found.");
-        }
         if(args.length == 2) {
             try {
-                Commit c1 = getCurrentCommit();
+                Commit c1 = getBranchHead(HEAD);
                 String contentsHash1 = c1.getContents().get(args[1]);
                 Path fromFile1 = Paths.get(".legit/contents/" + contentsHash1 + ".txt");
                 Path toFile1 = Paths.get(args[1]);
@@ -347,15 +265,9 @@ public class Repo {
             } if(HEAD.equals(args[0])) {
                 throw new IOException("No need to checkout the current branch.");
             }
-            Stream<String> lines = Files.lines(branchPath);
-            List<String> collect = lines.collect(Collectors.toList());
-            lines.close();
-            String branchHead = collect.get(collect.size()-1);
-            Path commitPath3 = Paths.get(".legit/commits/" + branchHead + ".txt");
-            byte[] bytes = Files.readAllBytes(commitPath3);
-            Commit c3 = (Commit) Utils.deserializeObject(bytes);
+            Commit c3 = getBranchHead(args[0]);
             List<String> fileNames = new ArrayList<String>(c3.getContents().keySet());
-            List<String> committedFiles = new ArrayList<>(getCurrentCommit().getContents().keySet());
+            List<String> committedFiles = new ArrayList<>(getBranchHead(HEAD).getContents().keySet());
             for(String name : fileNames) {
                 if(!committedFiles.contains(name)) {
                     throw new IOException("There is an untracked file in the way; delete it, or add and commit it first.");
@@ -371,8 +283,7 @@ public class Repo {
             }
             Path pathTohead = Paths.get(".legit/branches/HEAD.txt");
             HEAD = args[0];
-            Files.writeString(pathTohead, HEAD + System.lineSeparator());
-            Files.writeString(pathTohead, c3.getHash(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            Files.writeString(pathTohead, HEAD);
         }
         Files.write(Paths.get(".legit/staging-area.txt"), Utils.serializeObject(stagedFiles));
         Files.write(Paths.get(".legit/removed-files.txt"), Utils.serializeObject(removedFiles));
@@ -382,7 +293,7 @@ public class Repo {
         Path branchPath = Paths.get(".legit/branches/" + branchName + ".txt");
         if (Files.exists(branchPath)) {
             throw new IOException("A branch with that name already exists.");
-        } String hash = getCurrentCommit().getHash();
+        } String hash = getBranchHead(HEAD).getHash();
         Files.writeString(branchPath, hash + System.lineSeparator());
     }
 
@@ -403,7 +314,7 @@ public class Repo {
         byte[] data = Files.readAllBytes(cPath);
         Commit c = (Commit) Utils.deserializeObject(data);
         List<String> resetFiles = new ArrayList<String>(c.getContents().keySet());
-        List<String> currCommitFiles = new ArrayList<>(getCurrentCommit().getContents().keySet());
+        List<String> currCommitFiles = new ArrayList<>(getBranchHead(HEAD).getContents().keySet());
         for(String name : resetFiles) {
             if(!currCommitFiles.contains(name)) {
                 throw new IOException("There is an untracked file in the way; delete it, or add and commit it first.");
@@ -430,10 +341,212 @@ public class Repo {
             }
         }
         Path pathTohead = Paths.get(".legit/branches/HEAD.txt");
-        Files.writeString(pathTohead, HEAD + System.lineSeparator());
-        Files.writeString(pathTohead, c.getHash(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        Files.writeString(pathTohead, HEAD);
         Files.write(Paths.get(".legit/staging-area.txt"), Utils.serializeObject(stagedFiles));
         Files.write(Paths.get(".legit/removed-files.txt"), Utils.serializeObject(removedFiles));
     }
-    
+
+    //returns the head of a branch if isHead is true, and returns the end of the branch otherwise. getBranchHead(HEAD) returns current commit
+    public Commit getBranchHead(String branch) throws IOException {
+        Stream<String> lines = Files.lines(Paths.get(".legit/branches/" + branch + ".txt"));
+        List<String> collect = lines.collect(Collectors.toList());
+        lines.close();
+        String fileName = ".legit/commits/" + collect.get(collect.size()-1) + ".txt";
+        byte[] data = Files.readAllBytes(Paths.get(fileName));
+        return (Commit) Utils.deserializeObject(data);
+    }
+
+    public boolean mergeErrors(String branch) throws IOException {
+        if (!stagedFiles.isEmpty() || !removedFiles.isEmpty()) {
+            System.out.println("You have uncommitted changes.");
+            return true;
+        } else if (!Files.exists(Paths.get(".legit/branches/" + branch + ".txt"))) {
+            System.out.println("A branch with that name does not exist.");
+            return true;
+        } else if (branch.equals(HEAD)) {
+            System.out.println("Cannot merge a branch with itself.");
+            return true;
+        }
+        Commit c = getBranchHead(branch);
+        List<String> fileNames = new ArrayList<String>(c.getContents().keySet());
+        List<String> committedFiles = new ArrayList<>(getBranchHead(HEAD).getContents().keySet());
+        for(String name : fileNames) {
+            if(!committedFiles.contains(name)) {
+                System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    //the most recent commit that is a parent to a node on both branches should be the most recent common ancestor
+    public Commit findSplitPoint(String branch) throws IOException {
+        Commit curr = getBranchHead(HEAD);
+        Commit cPtr = curr;
+        Map<String, Commit> map = new HashMap<String, Commit>();
+
+        //get given branch's commit hashes, put parenthash, commit into hashmap
+        Stream<String> lines1 = Files.lines(Paths.get(".legit/branches/" + branch + ".txt"));
+        List<String> branchHashes = lines1.collect(Collectors.toList());
+        lines1.close();
+        for(String hash : branchHashes) {
+            String fileName = ".legit/commits/" + hash + ".txt";
+            byte[] data = Files.readAllBytes(Paths.get(fileName));
+            Commit c = (Commit) Utils.deserializeObject(data);
+            map.put(c.getParentHash(), c);
+        }
+        //in current branch work back from current commit and check if it has a parent reference that is contained in the hashmap
+        boolean found = false;
+        while(cPtr.getParentHash() != null) {
+            if(map.containsKey(cPtr.getParentHash())) found = true;
+            String parent = ".legit/commits/" + cPtr.getParentHash() + ".txt";
+            byte[] data = Files.readAllBytes(Paths.get(parent));
+            cPtr = (Commit) Utils.deserializeObject(data);
+            if(found) break;
+        }
+        if(!found) {
+            throw new IOException("There was an error finding the split point.");
+        }
+        return cPtr;
+    }
+
+    public void mergeLineByLine(Path currP, Path branchP) throws IOException {
+        try (BufferedReader reader1 = Files.newBufferedReader(currP);
+             BufferedReader reader2 = Files.newBufferedReader(branchP)) {
+            List<String> lines = new ArrayList<String>();
+            Queue<String> lines2 = new ArrayDeque<String>();
+            int lineNum = 1, prev = 1;
+            String line1 = reader1.readLine();
+            String line2 = reader2.readLine();
+            while (line1 != null || line2 != null) {
+                if(line1 == null || line2 == null) {
+                    if(lineNum - prev >1) {
+                        lines.add("<<<<<<< HEAD");
+                    }
+                    lines.add(line1);
+                    lines2.add(line2);
+                    prev = lineNum;
+                } else if (! line1.equalsIgnoreCase(line2)) {
+                    if(lineNum - prev >1) {
+                        lines.add("<<<<<<< HEAD");
+                    }
+                    lines.add(line1);
+                    lines2.add(line2);
+                    prev = lineNum;
+                } else if(!lines2.isEmpty()) {
+                    lines.add("=======");
+                    for(String item : lines2) {
+                        lines.add(item);
+                    }
+                    lines.add(">>>>>>>");
+                    lines2.clear();
+                    lines.add(line1);
+                } else lines.add(line1);
+                line1 = reader1.readLine();
+                line2 = reader2.readLine();
+                lineNum++;
+            }
+            for(String s : lines) {
+                if(s==null) lines.remove(s);
+            }
+            reader1.close();
+            reader2.close();
+            Files.write(currP, lines, StandardCharsets.UTF_8);
+        }
+    }
+
+    public void mergeEmpty(Path currP, Path branchP) throws IOException {
+        List<String> lines = new ArrayList<String>();
+        lines.add("<<<<<<< HEAD");
+        if(!Files.exists(currP)) {
+            try(BufferedReader reader = Files.newBufferedReader(branchP)) {
+                lines.add("=======");
+                String line1 = reader.readLine();
+                while (line1 != null) {
+                    lines.add(line1);
+                    line1 = reader.readLine();
+                }
+                reader.close();
+            }
+        } else if(!Files.exists(branchP)) {
+            try(BufferedReader reader = Files.newBufferedReader(currP)) {
+                String line1 = reader.readLine();
+                while (line1 != null) {
+                    lines.add(line1);
+                    line1 = reader.readLine();
+                }
+                reader.close();
+                lines.add("=======");
+            }
+        }
+        lines.add(">>>>>>>");
+        Files.write(currP, lines, StandardCharsets.UTF_8);
+    }
+
+    public void merge(String branch) throws IOException {
+        if(mergeErrors(branch)) return;
+        Commit split = findSplitPoint(branch);
+        if(split.equals(getBranchHead(branch))){
+            System.out.println("Given branch is an ancestor of the current branch.");
+            return;
+        }
+        //get current branch's commit hashes
+        Stream<String> lines2 = Files.lines(Paths.get(".legit/branches/" + HEAD + ".txt"));
+        List<String> currBranchHashes = lines2.collect(Collectors.toList());
+        lines2.close();
+        if(currBranchHashes.contains(split.getHash())) {
+            checkout(branch);
+            System.out.println("Current branch fast-forwarded.");
+            return;
+        }
+        Commit curr = getBranchHead(HEAD);
+        Commit branchHead = getBranchHead(branch);
+        HashMap<String, String> splitContents = split.getContents();
+        HashMap<String, String> currContents = curr.getContents();
+        HashMap<String, String> branchHeadContents = branchHead.getContents();
+        List<String> splitFiles = new ArrayList<>(splitContents.keySet());
+        List<String> branchFiles = new ArrayList<>(branchHeadContents.keySet());
+        List<String> currFiles = new ArrayList<>(currContents.keySet());
+        for(String file : splitFiles) {
+            if(currContents.containsKey(file) && !branchHeadContents.containsKey(file)) {
+                if(currContents.get(file).equals(splitContents.get(file))) {
+                    Files.delete(Paths.get(file));
+                    removedFiles.add(file);
+                    stagedFiles.remove(file);
+                }
+            } else if(currContents.containsKey(file) && branchHeadContents.containsKey(file)) {
+                if(!splitContents.get(file).equals(branchHeadContents.get(file)) && splitContents.get(file).equals(currContents.get(file))) {
+                    checkout(branchHead.getHash(), "--", file);
+                    stagedFiles.put(file, branchHeadContents.get(file));
+                }
+            }
+        } for(String file : branchFiles) {
+            if(!splitContents.containsKey(file) && !currContents.containsKey(file)) {
+                checkout(branchHead.getHash(), "--", file);
+                stagedFiles.put(file, branchHeadContents.get(file));
+            }
+        } for (String file : branchFiles) {
+            if (!splitContents.containsKey(file) ||
+                    (!splitContents.get(file).equals(branchHeadContents.get(file)) && !splitContents.get(file).equals(currContents.get(file)))) {
+                if (currFiles.contains(file) && !currContents.get(file).equals(branchHeadContents.get(file))) {
+                    mergeLineByLine(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                            Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                } else if (!currFiles.contains(file)) {
+                    mergeEmpty(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                            Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                }
+            }
+        } for(String file : currFiles) {
+            if (!splitContents.containsKey(file) ||
+                    (!splitContents.get(file).equals(branchHeadContents.get(file)) && !splitContents.get(file).equals(currContents.get(file)))) {
+                if (branchFiles.contains(file) && !currContents.get(file).equals(branchHeadContents.get(file))) {
+                    mergeLineByLine(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                            Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                } else if (!branchFiles.contains(file)) {
+                    mergeEmpty(Paths.get(".legit/contents/" + currContents.get(file) + ".txt"),
+                            Paths.get(".legit/contents/" + branchHeadContents.get(file) + ".txt"));
+                }
+            }
+        }
+    }
 }

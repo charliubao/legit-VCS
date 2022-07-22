@@ -82,6 +82,12 @@ public class Main {
                     }
                     break;
                 }
+                case "merge": {
+                    if (checkInput(2, args)) {
+                        r.merge(args[1]);
+                    }
+                    break;
+                }
                 default:
                     System.out.println("No command with that name exists.");
             }
